@@ -134,3 +134,76 @@ The four backfills ran one after another. Each sample below is near the end of o
 | 46483 | active | RPCWait | StorageFlush | backfilling | | 1952768 | 2000000 | 97.6 | 00:02:11.141726 |
 | 46483 | active | RPCWait | StorageFlush | backfilling | | 1995776 | 2000000 | 99.8 | 00:03:05.144235 |
 | 46483 | active | Cpu | OnCpu_Active | backfilling | | 1987584 | 2000000 | 99.4 | 00:04:05.142608 |
+
+
+
+
+## `c` in the primary key
+
+Same index shapes, with `c` in the primary key. Measured on a local YugabyteDB 2026.1.0.0-b0, database `yugabyte`, schema `varchar_pk_lab`, 50,000 rows.
+
+Three layouts:
+
+| Table | Primary key | Values in `c` |
+|---|---|---|
+| `t_pk` | `(c)` | `lpad(g::text, 5, '0')`, unique |
+| `t_cpk` | `(id, c)` | `'AB'` |
+| `t_cpk_lead` | `(c, id)` | `'AB'` |
+
+`ALTER TABLE ... ALTER COLUMN c TYPE varchar(15)` completed in each case. `c` is `varchar(15)` afterward. The table `relfilenode` stayed the same. The primary-key `relfilenode` stayed the same.
+
+The same four secondary indexes were backfilled: the partial index with `c` in the key and `WHERE v`, the partial covering index with `c` in the key and `WHERE n`, the partial index whose `WHERE` is on `c`, and the expression index `lower(c)`.
+
+### `t_pk` — primary key `(c)`
+
+| Index | Condition | Before | After | Result |
+|---|---|---:|---:|---|
+| `pk_i1_c_plain` | Key `(c)`. No `WHERE`. | 16667 | 16667 | not rebuilt |
+| `pk_i2_c_where_v_text` | Key `(v, c)`. `WHERE v`. | 16668 | 16679 | REBUILT |
+| `pk_i3_c_where_n_numeric` | Key `(n, c) INCLUDE (f)`. `WHERE n`. | 16669 | 16681 | REBUILT |
+| `pk_i4_where_on_c` | Key `(v)`. `WHERE c`. | 16670 | 16682 | REBUILT |
+| `pk_i5_expr_on_c` | Key `lower(c)`. | 16671 | 16680 | REBUILT |
+| `pk_i6_c_include` | Key `(v) INCLUDE (c)`. No `WHERE`. | 16672 | 16672 | not rebuilt |
+| `pk_i7_v_plain` | Key `(v)`. No `WHERE`. | 16673 | 16673 | not rebuilt |
+| `pk_i8_v_where_v_text` | Key `(v)`. `WHERE v`. `c` is not used. | 16674 | 16674 | not rebuilt |
+| `pk_i9_expr_on_v` | Key `lower(v)`. `c` is not used. | 16675 | 16675 | not rebuilt |
+| `t_pk` | Table. | 16662 | 16662 | not rebuilt |
+| `t_pk_pkey` | Primary key `(c)`. | 16665 | 16665 | not rebuilt |
+
+### `t_cpk` — composite primary key `(id, c)`
+
+| Index | Condition | Before | After | Result |
+|---|---|---:|---:|---|
+| `i1_c_plain` | Key `(c)`. No `WHERE`. | 16646 | 16646 | not rebuilt |
+| `i2_c_where_v_text` | Key `(v, c)`. `WHERE v`. | 16647 | 16659 | REBUILT |
+| `i3_c_where_n_numeric` | Key `(n, c) INCLUDE (f)`. `WHERE n`. | 16648 | 16658 | REBUILT |
+| `i4_where_on_c` | Key `(v)`. `WHERE c`. | 16649 | 16660 | REBUILT |
+| `i5_expr_on_c` | Key `lower(c)`. | 16650 | 16661 | REBUILT |
+| `i6_c_include` | Key `(v) INCLUDE (c)`. No `WHERE`. | 16651 | 16651 | not rebuilt |
+| `i7_v_plain` | Key `(v)`. No `WHERE`. | 16652 | 16652 | not rebuilt |
+| `i8_v_where_v_text` | Key `(v)`. `WHERE v`. `c` is not used. | 16653 | 16653 | not rebuilt |
+| `i9_expr_on_v` | Key `lower(v)`. `c` is not used. | 16654 | 16654 | not rebuilt |
+| `t_cpk` | Table. | 16641 | 16641 | not rebuilt |
+| `t_cpk_pkey` | Primary key `(id, c)`. | 16644 | 16644 | not rebuilt |
+
+
+
+
+### `t_cpk_lead` — composite primary key `(c, id)`
+
+| Index | Condition | Before | After | Result |
+|---|---|---:|---:|---|
+| `lead_i1_c_plain` | Key `(c)`. No `WHERE`. | 16688 | 16688 | not rebuilt |
+| `lead_i2_c_where_v_text` | Key `(v, c)`. `WHERE v`. | 16689 | 16701 | REBUILT |
+| `lead_i3_c_where_n_numeric` | Key `(n, c) INCLUDE (f)`. `WHERE n`. | 16690 | 16700 | REBUILT |
+| `lead_i4_where_on_c` | Key `(v)`. `WHERE c`. | 16691 | 16703 | REBUILT |
+| `lead_i5_expr_on_c` | Key `lower(c)`. | 16692 | 16702 | REBUILT |
+| `lead_i6_c_include` | Key `(v) INCLUDE (c)`. No `WHERE`. | 16693 | 16693 | not rebuilt |
+| `lead_i7_v_plain` | Key `(v)`. No `WHERE`. | 16694 | 16694 | not rebuilt |
+| `lead_i8_v_where_v_text` | Key `(v)`. `WHERE v`. `c` is not used. | 16695 | 16695 | not rebuilt |
+| `lead_i9_expr_on_v` | Key `lower(v)`. `c` is not used. | 16696 | 16696 | not rebuilt |
+| `t_cpk_lead` | Table. | 16683 | 16683 | not rebuilt |
+| `t_cpk_lead_pkey` | Primary key `(c, id)`. | 16686 | 16686 | not rebuilt |
+
+Putting `c` in the primary key did not change the result. The table was not backfilled. The primary key was not backfilled, whether `c` is the only key column, the second column of `(id, c)`, or the first column of `(c, id)`. A plain index on `c` was not backfilled. A covering index that only `INCLUDE`s `c` was not backfilled. A partial or expression index that does not use `c` was not backfilled.
+
